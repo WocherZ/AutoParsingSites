@@ -2,9 +2,12 @@ import requests
 import re
 import csv
 from bs4 import BeautifulSoup
+from requests_html import HTMLSession
 
 from residents import RESIDENTIALS
 from RE_templates import RE_templates
+
+DEBUG = True
 
 
 def get_key(d, value):  # взять ключ из словаря по его значению
@@ -50,13 +53,13 @@ def search_info(residents):
     :return:
     """
     for residence in residents:
-        if len(residence.get("urls")) == 1:
+        if len(residence.get("urls")) == 1:  # Если ссылка ЖК одна
             for url in residence.get("urls"):
                 print("Парсинг урла: ", url)
                 data = data_parser(url)
                 print("Кол-во квартир:", len(data))
                 record_data(data, residence)
-        else:
+        else:  # Если несколько ссылок на ЖК
             number = 0
             for url in residence.get("urls"):
                 print("Парсинг урла: ", url)
@@ -72,18 +75,28 @@ def data_parser(url):
     :param url:
     :return:
     """
-    response = requests.get(url)
-    return get_content(response)
+    try:
+        session = HTMLSession()
+        r = session.get(url)
+        r.html.render()
+        response = r.html.html  # rendered html
+        soup = BeautifulSoup(response, 'html.parser')
+
+    except:
+        response = requests.get(url)
+        soup = BeautifulSoup(response.text, 'html.parser')
+
+    finally:
+        return get_content(soup)
 
 
-def get_content(html):
+def get_content(soup):
     """
     Обрабатывает html-документ
-    :param html:
-    :return:
+    :param soup: BeautifulSoup object
+    :return: list of flats
     """
-    soup = BeautifulSoup(html.text, 'html.parser')
-    print(soup)
+
     blocks = soup.find('body').find_all(['div'])  # Ищет все блоки div
 
     result_residential = []
@@ -95,11 +108,18 @@ def get_content(html):
             # print(dict_cls)
             # print("Кол-во элементов с одним классом ", dict_cls.get('count'))
 
+    if DEBUG:
+        if need_blocks:
+            print("Найдено блоков для проверки: ", len(need_blocks))
+        else:
+            print("Блоки для проверки не найдены")
 
     for need_block in need_blocks:  # обработка каждого блока, у которого несколько детей с одним классом
         for block in need_block:  # обработка каждого дочернего блока
             text_block = find_text(block)
-            # print(text_block)
+            if DEBUG:
+                print("Текс блока: ", end="")
+                print(text_block)
 
             for template in RE_templates:
                 price = re.findall(template.get('price'), text_block)
@@ -107,8 +127,11 @@ def get_content(html):
                 floor = re.findall(template.get('floor'), text_block)
                 rooms = re.findall(template.get('rooms'), text_block)
                 # print("Данные о квартире:", rooms, square, price, floor)
-                if validate_data(rooms, square, price, floor):
-                    # print("Данные о квартире:", rooms, square, price, floor)
+                if validate_data(rooms, square, price):
+                    if DEBUG:
+                        print("Данные прошли валидацию")
+                        print("Данные о квартире:", rooms, square, price, floor)
+
                     flat = {
                         'rooms': rooms[0],
                         'price': price[0],
@@ -116,8 +139,11 @@ def get_content(html):
                     }
                     if floor:
                         flat['floor'] = re.search(r'\d+', floor[0]).group(0)
-                        result_residential.append(flat)
+                    result_residential.append(flat)
                     break
+                else:
+                    if DEBUG:
+                        print("Данные не прошли валидацию")
 
     return result_residential
 
@@ -131,7 +157,7 @@ def find_text(html):
     return result_string
 
 
-def validate_data(rooms, square, price, floor=[]):
+def validate_data(rooms, square, price):
     """
     Функция проверки правильности полученных данных из регулярных выражений
     :param rooms:
@@ -154,7 +180,7 @@ def record_data(data, residence, number=''):
     :param number:
     :return:
     """
-    file_name = residence.get('name') + number + '.csv'
+    file_name = "data/" + residence.get('name') + number + '.csv'
     with open(file_name, mode="w", encoding='utf-16') as file:
         file_writer = csv.writer(file, delimiter=';', lineterminator="\r")
         file_writer.writerow(['Количество комнат', 'Цена квартиры', 'Площадь', 'Этаж'])
